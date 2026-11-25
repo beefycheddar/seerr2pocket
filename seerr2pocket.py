@@ -3,7 +3,7 @@
 seerr2pocket.py - copy users (name + email) from Seerr into Pocket ID.
 
 One-time migration. Python 3.6+, standard library only (no pip installs).
-https://github.com/<you>/seerr2pocket
+https://github.com/beefycheddar/seerr2pocket
 
 Dry run by default: it shows what it would change and changes nothing.
 Add --apply to actually make the changes.
