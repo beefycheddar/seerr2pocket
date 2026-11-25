@@ -11,6 +11,7 @@ It's a single Python file with no dependencies. It runs anywhere Python 3.6+ doe
 - Leaves existing Pocket ID accounts alone, matching them by email. This makes it safe to run more than once.
 - Skips Seerr users without a real email address. This is common for Jellyfin-imported users, whose username often ends up in the email field.
 - Optionally (`--update-names`) copies Seerr's names onto Pocket ID accounts that already exist.
+- Optionally (`--group`) adds everyone to one or more Pocket ID groups, so you can use groups to control which apps they can reach.
 - **Dry run by default.** Nothing changes until you add `--apply`.
 
 New accounts are created as **non-admins** with **no passkey**. Each user still needs a one-time setup link. You can generate one per user from the Pocket ID admin **Users** page, or, if SMTP is configured, let Pocket ID email it.
@@ -25,7 +26,7 @@ New accounts are created as **non-admins** with **no passkey**. Each user still 
 ## Usage
 
 ```bash
-curl -O https://raw.githubusercontent.com/beefycheddar/seerr2pocket/main/seerr2pocket.py
+curl -O https://raw.githubusercontent.com/<you>/seerr2pocket/main/seerr2pocket.py
 
 export SEERR_URL=http://seerr.local:5055
 export SEERR_API_KEY=your-seerr-api-key
@@ -44,6 +45,20 @@ Each `export` lasts only for the current shell session, so your API keys are nev
 |---|---|
 | `--apply` | Make the changes. Without this, nothing is written. |
 | `--update-names` | For users already in Pocket ID (matched by email), replace first name, last name and display name with Seerr's. Username, email, admin status and enabled/disabled are kept as they are. |
+| `--group NAME` | Add every Seerr user that has a Pocket ID account (new and existing) to this group. Matches the group's name or friendly name, ignoring case. Repeat it for several groups: `--group family --group media`. |
+
+### Groups
+
+The group has to exist already; create it in the Pocket ID admin UI first. If the name doesn't match any group, the script stops before changing anything and lists the groups it found.
+
+Members are only ever **added**. Anyone already in the group stays there, including people who aren't in Seerr. Running it again only adds whoever is missing.
+
+A common setup is a `family` group, with each OIDC client (Jellyfin, Seerr, and so on) limited to that group under **Allowed User Groups** in Pocket ID:
+
+```bash
+python3 seerr2pocket.py --group family            # preview
+python3 seerr2pocket.py --group family --apply    # create users and add them to the group
+```
 
 ### Example output
 
@@ -67,6 +82,8 @@ Dry run only. Re-run with --apply to create them.
 | `NAME` | Name would change / changed (`--update-names`), shown old → new |
 | `SAME` | Already in Pocket ID with identical names |
 | `SKIP` | Seerr has no usable email for this user |
+| `JOIN` | Would be added / was added to a group (`--group`) |
+| `GROUP` | Group note, such as everyone already being a member |
 | `FAIL` | Pocket ID rejected the request; the error follows |
 
 ## How fields are mapped
@@ -83,7 +100,8 @@ Dry run only. Re-run with --apply to create them.
 - **Matching is by email only.** If someone uses a different email in Seerr than in Pocket ID, the script treats them as two people and creates a second account. The reverse also holds: Pocket ID accounts whose email isn't in Seerr are never touched.
 - **Seerr names are often usernames.** Many Seerr display names are just a Jellyfin or Plex handle, so `--update-names` can replace a real name like "Alice Smith" with "asmith42". Review the dry run before you apply it.
 - **One person with two Seerr accounts gets two Pocket ID accounts.** If the same person signed up in Seerr twice with different emails, check for duplicates afterward.
-- **LDAP-synced Pocket ID users are never edited.**
+- **LDAP-synced Pocket ID users and groups are never edited.**
+- **`--group` includes existing accounts, yours too.** Every Seerr user with a Pocket ID account is added, not only the ones created in this run. Check the `JOIN` lines in the dry run.
 - **Admin rights are never granted.** Promote people in the Pocket ID UI if needed.
 
 ## Running on a Synology NAS

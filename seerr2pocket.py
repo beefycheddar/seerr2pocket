@@ -3,7 +3,7 @@
 seerr2pocket.py - copy users (name + email) from Seerr into Pocket ID.
 
 One-time migration. Python 3.6+, standard library only (no pip installs).
-https://github.com/beefycheddar/seerr2pocket
+https://github.com/<you>/seerr2pocket
 
 Dry run by default: it shows what it would change and changes nothing.
 Add --apply to actually make the changes.
@@ -18,6 +18,7 @@ Usage:
   python3 seerr2pocket.py --apply                  # create users
   python3 seerr2pocket.py --update-names           # preview name changes too
   python3 seerr2pocket.py --update-names --apply   # create + rename
+  python3 seerr2pocket.py --group family --apply   # create + add everyone to "family"
 """
 
 import argparse
@@ -94,6 +95,74 @@ def pocket_existing(base, key):
         page += 1
 
 
+def pocket_groups(base, key):
+    groups, page = [], 1
+    while True:
+        status, data = http(
+            "GET",
+            f"{base}/api/user-groups?pagination%5Bpage%5D={page}&pagination%5Blimit%5D=100",
+            {"X-API-KEY": key},
+        )
+        if status != 200:
+            sys.exit(f"Pocket ID group list failed ({status}): {data}")
+        rows = data.get("data", []) if isinstance(data, dict) else data
+        groups.extend(rows)
+        pag = data.get("pagination", {}) if isinstance(data, dict) else {}
+        if not rows or page >= pag.get("totalPages", 1):
+            return groups
+        page += 1
+
+
+def resolve_groups(wanted, groups):
+    """Match each requested name against a group's name or friendly name."""
+    out = []
+    for w in wanted:
+        hit = [g for g in groups
+               if w.lower() in ((g.get("name") or "").lower(),
+                                (g.get("friendlyName") or "").lower())]
+        if not hit:
+            avail = ", ".join(sorted(g.get("name", "?") for g in groups)) or "(none)"
+            sys.exit(f"Pocket ID group {w!r} not found. Create it in the Pocket ID "
+                     f"admin UI first. Existing groups: {avail}")
+        out.append(hit[0])
+    return out
+
+
+def assign_groups(base, key, groups, targets, apply):
+    """Add target users to each group, keeping everyone already in it.
+    targets: list of (email, user_id); user_id is None for users not created yet (dry run).
+    Returns (joins, failures)."""
+    joins = fails = 0
+    for g in groups:
+        label = g.get("friendlyName") or g.get("name")
+        if g.get("ldapId"):
+            print(f"  GROUP {label}: LDAP-managed, not editing")
+            continue
+        status, detail = http("GET", f"{base}/api/user-groups/{g['id']}",
+                              {"X-API-KEY": key})
+        if status != 200:
+            print(f"  FAIL  group {label}: {status} {detail}")
+            fails += 1
+            continue
+        members = {u["id"] for u in (detail.get("users") or [])}
+        adding = [(e, uid) for e, uid in targets if uid is None or uid not in members]
+        if not adding:
+            print(f"  GROUP {label}: everyone already in it")
+            continue
+        for e, _ in adding:
+            print(f"  JOIN  {e}  ->  {label}")
+        if apply:
+            ids = sorted(members | {uid for _, uid in adding if uid})
+            status, resp = http("PUT", f"{base}/api/user-groups/{g['id']}/users",
+                                {"X-API-KEY": key}, {"userIds": ids})
+            if status not in (200, 201):
+                print(f"  FAIL  group {label}: {status} {resp}")
+                fails += 1
+                continue
+        joins += len(adding)
+    return joins, fails
+
+
 def make_username(seed, taken):
     """Pocket ID usernames: lowercase letters, digits, _ . - ; must start/end alphanumeric."""
     u = re.sub(r"[^a-z0-9_.-]", "", seed.lower())
@@ -122,6 +191,9 @@ def main():
     ap.add_argument("--update-names", action="store_true",
                     help="also overwrite first/last/display name of users "
                          "already in Pocket ID (matched by email) with Seerr's")
+    ap.add_argument("--group", action="append", default=[], metavar="NAME",
+                    help="add every Seerr user found in Pocket ID (new and existing) "
+                         "to this Pocket ID group; repeat for more than one group")
     args = ap.parse_args()
 
     try:
@@ -134,8 +206,13 @@ def main():
 
     src = seerr_users(s_url, s_key)
     have_emails, have_names = pocket_existing(p_url, p_key)
-    print(f"Seerr users: {len(src)}   Pocket ID users: {len(have_emails)}\n")
+    groups = resolve_groups(args.group, pocket_groups(p_url, p_key)) if args.group else []
+    print(f"Seerr users: {len(src)}   Pocket ID users: {len(have_emails)}")
+    if groups:
+        print("Groups: " + ", ".join(g.get("friendlyName") or g.get("name") for g in groups))
+    print()
 
+    targets = []  # (email, pocket user id) for group assignment
     created = exists = updated = no_email = failed = 0
     for su in src:
         email = (su.get("email") or "").strip()
@@ -153,6 +230,7 @@ def main():
         existing = have_emails.get(email.lower())
         if existing:
             exists += 1
+            targets.append((email, existing.get("id")))
             if not args.update_names:
                 print(f"  HAVE  {email}")
                 continue
@@ -207,6 +285,7 @@ def main():
 
         if not args.apply:
             print(f"  NEW   {email}  ->  username={username}  name={display!r}")
+            targets.append((email, None))
             created += 1
             continue
 
@@ -214,17 +293,34 @@ def main():
         if status in (200, 201):
             print(f"  ADDED {email}  ({username})")
             have_emails[email.lower()] = body
+            targets.append((email, resp.get("id") if isinstance(resp, dict) else None))
             created += 1
         else:
             print(f"  FAIL  {email}: {status} {resp}")
             failed += 1
 
+    joins = 0
+    if groups:
+        if args.apply:
+            # Look up IDs fresh so newly created users are included even if the
+            # create response didn't return one.
+            fresh, _ = pocket_existing(p_url, p_key)
+            targets = [(e, (fresh.get(e.lower()) or {}).get("id")) for e, _ in targets]
+            targets = [(e, uid) for e, uid in targets if uid]
+        print()
+        joins, gfail = assign_groups(p_url, p_key, groups, targets, args.apply)
+        failed += gfail
+
     c_verb = "created" if args.apply else "would create"
     u_verb = "renamed" if args.apply else "would rename"
-    print(f"\n{created} {c_verb}, {exists} already in Pocket ID "
-          f"({updated} {u_verb}), {no_email} skipped (no email), {failed} failed")
+    j_verb = "group additions" if args.apply else "group additions pending"
+    summary = (f"\n{created} {c_verb}, {exists} already in Pocket ID "
+               f"({updated} {u_verb}), {no_email} skipped (no email)")
+    if groups:
+        summary += f", {joins} {j_verb}"
+    print(summary + f", {failed} failed")
     if not args.apply:
-        print("Dry run only. Re-run with --apply to create them.")
+        print("Dry run only. Re-run with --apply to make these changes.")
 
 
 if __name__ == "__main__":
