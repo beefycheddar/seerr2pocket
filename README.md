@@ -1,6 +1,6 @@
 # seerr2pocket
 
-Copy your users from [Seerr](https://github.com/seerr-team/seerr) into [Pocket ID](https://github.com/pocket-id/pocket-id), so everyone who already requests media on your server has a Pocket ID account ready for passkey sign-in to Jellyfin, Headscale and anything else behind your OIDC provider.
+Copy your users from [Seerr](https://github.com/seerr-team/seerr) into [Pocket ID](https://github.com/pocket-id/pocket-id), so everyone who already requests media on your server has a Pocket ID account ready for passkey sign-in to Jellyfin, Silo, Headscale and anything else behind your OIDC provider. See [Use cases](#use-cases).
 
 It's a single Python file with no dependencies. It runs anywhere Python 3.6+ does, including a Synology NAS over SSH.
 
@@ -15,6 +15,39 @@ It's a single Python file with no dependencies. It runs anywhere Python 3.6+ doe
 - **Dry run by default.** Nothing changes until you add `--apply`.
 
 New accounts are created as **non-admins** with **no passkey**. Each user still needs a one-time setup link. You can generate one per user from the Pocket ID admin **Users** page, or, if SMTP is configured, let Pocket ID email it.
+
+## Use cases
+
+Seerr usually already has the most complete list of the people who use your media server: everyone who has ever requested a movie or show. seerr2pocket turns that list into Pocket ID accounts, so you don't have to recreate every user by hand when you move to single sign-on.
+
+The script only creates accounts in Pocket ID. Apps that sign in through Pocket ID usually create their own account for a person the first time that person signs in, so once someone has a Pocket ID account and a passkey, the other apps follow on their own.
+
+### Bring existing users into Jellyfin
+
+With an OIDC/SSO plugin pointed at Pocket ID, Jellyfin can create a matching Jellyfin account the first time each person clicks "Sign in with Pocket ID".
+
+1. Run seerr2pocket with a group, for example `--group jellyfin`.
+2. In Pocket ID, limit the Jellyfin OIDC client to that group under **Allowed User Groups**.
+3. Send each user their Pocket ID passkey setup link.
+4. They sign in to Jellyfin with Pocket ID, and their Jellyfin account is created.
+
+If your plugin can map groups to Jellyfin roles or library access, the same groups can decide what each person sees. Check your plugin's settings for whether it creates accounts automatically.
+
+### Bring existing users into Silo
+
+Silo works the same way through its OIDC plugin. Imported users sign in to Silo with Pocket ID, and the Silo account is created on first sign-in if the plugin is set to do that. Put Silo users in their own group (`--group silo`) if not everyone who uses Jellyfin should get Silo, or the other way around.
+
+### One account for the whole stack
+
+The same Pocket ID account can sign people in to anything else on your server that uses OIDC, such as Headscale/Tailscale for remote access, Seerr itself once its OIDC support is stable, and dashboards. Run the import once, give each app its own group, and control access by adding people to groups instead of managing separate logins in each app:
+
+```bash
+python3 seerr2pocket.py --group jellyfin --group silo --apply
+```
+
+### Keep Pocket ID in step with Seerr
+
+The script is safe to run again. Re-run it after new people join Seerr to give them Pocket ID accounts and put them in the same groups. Nobody who already exists is changed unless you use `--update-names`.
 
 ## Requirements
 
