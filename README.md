@@ -26,7 +26,7 @@ New accounts are created as **non-admins** with **no passkey**. Each user still 
 ## Usage
 
 ```bash
-curl -O https://raw.githubusercontent.com/<you>/seerr2pocket/main/seerr2pocket.py
+curl -O https://raw.githubusercontent.com/beefycheddar/seerr2pocket/main/seerr2pocket.py
 
 export SEERR_URL=http://seerr.local:5055
 export SEERR_API_KEY=your-seerr-api-key
